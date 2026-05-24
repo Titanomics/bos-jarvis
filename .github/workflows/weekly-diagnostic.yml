@@ -2,6 +2,15 @@ name: BOS자비스 주간 자가 진단
 
 on:
   workflow_dispatch:  # 수동 트리거
+    inputs:
+      dry_run:
+        description: 'Dry-run 모드 (Claude API 호출 X, 데이터 fetch만 검증)'
+        required: false
+        default: 'true'  # 기본 dry-run으로 안전하게
+        type: choice
+        options:
+          - 'true'
+          - 'false'
   schedule:
     # 매주 일요일 19:30 KST = 10:30 UTC
     - cron: '30 10 * * 0'
@@ -30,4 +39,9 @@ jobs:
           BOS_SLACK_BOT_TOKEN: ${{ secrets.BOS_SLACK_BOT_TOKEN }}
           BOS_SLACK_CHANNEL_ID: ${{ secrets.BOS_SLACK_CHANNEL_ID }}
           VAULT_SYNC_TOKEN: ${{ secrets.VAULT_SYNC_TOKEN }}
-        run: python bos_jarvis.py
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python bos_jarvis.py --dry-run
+          else
+            python bos_jarvis.py
+          fi

@@ -14,6 +14,7 @@ BOS자비스 — 주간 자가 진단 자동화
 
 import os
 import sys
+import argparse
 import subprocess
 import shutil
 import tempfile
@@ -360,8 +361,78 @@ def post_to_slack(report: str):
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
+def build_dry_run_report(data: dict[str, str], slack_history: str, system_prompt: str, user_message: str) -> str:
+    """Claude API 호출 없이 fetch 결과만 요약."""
+    # Vault 파일별 사이즈
+    vault_summary = []
+    for key, val in data.items():
+        if val:
+            preview = val.split("\n")[0][:100] if val else "(빈 값)"
+            vault_summary.append(f"  • `{key}`: {len(val):,} chars — {preview}")
+        else:
+            vault_summary.append(f"  • `{key}`: (없음)")
+
+    # 슬랙 채널 추출 (sections에서 ### 헤더)
+    slack_channels = []
+    for line in slack_history.split("\n"):
+        if line.startswith("### "):
+            slack_channels.append(f"  • {line[4:]}")
+
+    # 토큰 추정 (대략 1 token = 3.5 chars for 한국어)
+    total_input_chars = len(system_prompt) + len(user_message)
+    estimated_tokens = total_input_chars // 3
+    opus_cost = (estimated_tokens / 1_000_000) * 15  # $15 per 1M input
+    sonnet_cost = (estimated_tokens / 1_000_000) * 3
+
+    return f"""🔍 *BOS자비스 Dry-Run 검증 — {TODAY}*
+
+Claude API 호출 X. fetch한 데이터만 요약.
+
+---
+
+*📁 Vault 데이터 ({sum(len(v) for v in data.values()):,} chars)*
+
+{chr(10).join(vault_summary)}
+
+---
+
+*💬 슬랙 History ({len(slack_history):,} chars)*
+
+봇이 멤버로 있는 채널 + DM에서 지난 7일 메시지:
+
+{chr(10).join(slack_channels) if slack_channels else "  (메시지 없음 — 봇이 채널에 초대 안 됐을 가능성)"}
+
+---
+
+*🧮 토큰/비용 추정*
+
+• 총 입력 chars: `{total_input_chars:,}`
+• 추정 input tokens: `~{estimated_tokens:,}` (한국어 1 token ≈ 3 chars)
+• 추정 출력 tokens: `~5,000`
+• 비용 추정:
+  - Opus 4.7: **~${opus_cost + 0.375:.2f}** (input ${opus_cost:.2f} + output $0.375)
+  - Sonnet 4.6: **~${sonnet_cost + 0.075:.2f}**
+  - Haiku 4.5: **~${(estimated_tokens / 1_000_000) * 0.8 + 0.02:.2f}**
+
+---
+
+*✅ 다음 액션*
+
+1. 위 데이터가 충분한지 확인 (vault 핵심 파일 모두 fetch됐는지)
+2. 슬랙 채널 누락이 없는지 (필요한 채널에 봇 초대됐는지)
+3. 비용이 OK면 → Actions에서 다시 트리거 (`dry_run`을 `false`로) → 진짜 진단 발송
+
+문제 있으면: 어떤 데이터 누락? 어떤 채널 추가 필요? 알려주세요.
+"""
+
+
 def main():
-    print(f"🤖 BOS자비스 시작 — {datetime.now(KST).isoformat()}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="Claude API 호출 X, fetch 결과만 슬랙에 발송")
+    args = parser.parse_args()
+
+    mode = "🔍 DRY-RUN" if args.dry_run else "🤖 REAL"
+    print(f"{mode} BOS자비스 시작 — {datetime.now(KST).isoformat()}")
 
     vault = None
     try:
@@ -374,12 +445,19 @@ def main():
         slack_history = fetch_slack_history()
         print(f"✅ 슬랙 history ({len(slack_history)} chars)")
 
-        # 3. Claude API
+        # 3. 시스템 프롬프트 + 사용자 메시지 구성
         system_prompt = build_system_prompt(data)
         user_message = build_user_message(data, slack_history)
         print(f"📊 시스템 프롬프트 {len(system_prompt)} chars / 사용자 메시지 {len(user_message)} chars")
-        report = call_claude(system_prompt, user_message)
-        print(f"✅ 진단 리포트 생성 ({len(report)} chars)")
+
+        if args.dry_run:
+            # Dry-run: API 호출 X, 데이터 요약 발송
+            report = build_dry_run_report(data, slack_history, system_prompt, user_message)
+            print("🔍 Dry-run 리포트 생성 (Claude API 호출 X)")
+        else:
+            # 실제 진단
+            report = call_claude(system_prompt, user_message)
+            print(f"✅ 진단 리포트 생성 ({len(report)} chars)")
 
         # 4. 슬랙 발송
         post_to_slack(report)
