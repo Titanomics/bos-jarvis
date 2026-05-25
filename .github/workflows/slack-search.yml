@@ -1,0 +1,54 @@
+name: 슬랙 채널 검색
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel_prefix:
+        description: '채널 접두어 (cm = 커머스팀, ct = 컨텐츠팀)'
+        required: true
+        default: 'cm'
+        type: choice
+        options:
+          - 'cm'
+          - 'ct'
+      keywords:
+        description: '키워드 (쉼표 구분)'
+        required: true
+        default: '스레드,키워드랭킹,개발,수정,버그,추가,기능,개선'
+      user_filter:
+        description: '사용자 이름 부분 매칭 (빈 값 = 전체)'
+        required: false
+        default: '지수'
+      days_back:
+        description: '며칠 전부터 (1~30)'
+        required: false
+        default: '14'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 셋업
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 슬랙 검색 실행
+        env:
+          BOS_SLACK_BOT_TOKEN: ${{ secrets.BOS_SLACK_BOT_TOKEN }}
+          BOS_SLACK_CHANNEL_ID: ${{ secrets.BOS_SLACK_CHANNEL_ID }}
+        run: |
+          python slack_search.py \
+            --channel-prefix "${{ github.event.inputs.channel_prefix }}" \
+            --keywords "${{ github.event.inputs.keywords }}" \
+            --user-filter "${{ github.event.inputs.user_filter }}" \
+            --days-back "${{ github.event.inputs.days_back }}"
